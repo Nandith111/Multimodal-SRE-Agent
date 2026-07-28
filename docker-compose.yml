@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sre_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sre_password}
+      POSTGRES_DB: ${POSTGRES_DB:-sre_kb}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:10.0.3
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    ports:
+      - "5000:5000"
+    command: mlflow server --host 0.0.0.0 --port 5000
+
+  app:
+    build:
+      context: .
+      target: builder
+    ports:
+      - "8000:8000"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql://sre_user:sre_password@postgres:5432/sre_kb
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      - redis
+      - postgres
+      - mlflow
+
+  worker:
+    build:
+      context: .
+      target: builder
+    command: celery -A worker.celery_app worker --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql://sre_user:sre_password@postgres:5432/sre_kb
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      - redis
+      - postgres
+      - mlflow
+
+volumes:
+  postgres_data:
